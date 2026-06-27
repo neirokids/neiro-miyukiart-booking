@@ -140,9 +140,16 @@ export async function createReservation(
 
   const newReservation = rowToReservation(data);
 
-  // 予約受付時の連携処理（スタブ）
+  // 予約受付時の連携処理：待機（キャンセル待ち）以外は即時カレンダー登録する
   if (newReservation.status !== "waitlist") {
-    void syncToGoogleCalendar(newReservation);
+    void syncToGoogleCalendar(newReservation).then(async (synced) => {
+      if (synced) {
+        await supabase
+          .from("reservations")
+          .update({ calendar_synced: true })
+          .eq("id", newReservation.id);
+      }
+    });
   }
   void notifyLine(newReservation);
 
@@ -197,7 +204,7 @@ export async function updateReservationStatus(
 // 予約が承認されたタイミングで、レッスンの予定をカレンダーに登録する。
 // 環境変数（GOOGLE_CLIENT_ID等）が未設定の場合は自動的にスキップされる。
 // ─────────────────────────────────────────
-async function syncToGoogleCalendar(reservation: Reservation): Promise<void> {
+async function syncToGoogleCalendar(reservation: Reservation): Promise<boolean> {
   const lesson = getLessonById(reservation.lessonId);
   if (!lesson) return;
 
@@ -223,13 +230,15 @@ async function syncToGoogleCalendar(reservation: Reservation): Promise<void> {
     endIso: endDate.toISOString(),
   });
 
-  if (result.success) {
+ if (result.success) {
     console.log(
       `[Googleカレンダー] 登録成功: 予約ID=${reservation.id} イベントID=${result.eventId}`
     );
   } else {
     console.error(`[Googleカレンダー] 登録失敗: 予約ID=${reservation.id}`);
   }
+
+  return result.success;
 }
 
 // ─────────────────────────────────────────
