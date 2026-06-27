@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { createCalendarEvent } from "./googleCalendar";
 import type { Lesson, Reservation, ReservationInput, ReservationStatus } from "./types";
 
 // ─────────────────────────────────────────
@@ -192,17 +193,43 @@ export async function updateReservationStatus(
 }
 
 // ─────────────────────────────────────────
-// Googleカレンダー連携（スタブ実装）
-// 本番接続時はここに OAuth + Calendar API 呼び出しを実装する
+// Googleカレンダー連携
+// 予約が承認されたタイミングで、レッスンの予定をカレンダーに登録する。
+// 環境変数（GOOGLE_CLIENT_ID等）が未設定の場合は自動的にスキップされる。
 // ─────────────────────────────────────────
 async function syncToGoogleCalendar(reservation: Reservation): Promise<void> {
-  // TODO: 本番実装
-  // 1. Google OAuth2クライアントを用意（環境変数: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN）
-  // 2. calendar.events.insert() でイベントを作成 or 既存イベントに参加者として紐付け
-  // 3. 成功したら reservation.calendarSynced = true として保存
-  console.log(
-    `[stub] Googleカレンダー同期（未実装）: 予約ID=${reservation.id} 氏名=${reservation.parentName}`
-  );
+  const lesson = getLessonById(reservation.lessonId);
+  if (!lesson) return;
+
+  const startDate = new Date(lesson.date);
+  const endDate = new Date(startDate.getTime() + lesson.durationMinutes * 60 * 1000);
+
+  const result = await createCalendarEvent({
+    title: `【予約確定】${lesson.title}（${reservation.childName}様）`,
+    description: [
+      `保護者氏名: ${reservation.parentName}`,
+      `お子様氏名: ${reservation.childName}（${reservation.childNameKana}）`,
+      `年齢・学年: ${reservation.childAge}`,
+      reservation.hasSibling
+        ? `ご兄弟: ${reservation.siblingName}（${reservation.siblingNameKana}・${reservation.siblingAge}）`
+        : null,
+      `連絡先: ${reservation.email} / ${reservation.phone}`,
+      reservation.note ? `伝達事項: ${reservation.note}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    location: lesson.location,
+    startIso: startDate.toISOString(),
+    endIso: endDate.toISOString(),
+  });
+
+  if (result.success) {
+    console.log(
+      `[Googleカレンダー] 登録成功: 予約ID=${reservation.id} イベントID=${result.eventId}`
+    );
+  } else {
+    console.error(`[Googleカレンダー] 登録失敗: 予約ID=${reservation.id}`);
+  }
 }
 
 // ─────────────────────────────────────────
