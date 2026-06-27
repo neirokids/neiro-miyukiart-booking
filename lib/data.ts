@@ -141,15 +141,17 @@ export async function createReservation(
   const newReservation = rowToReservation(data);
 
   // 予約受付時の連携処理：待機（キャンセル待ち）以外は即時カレンダー登録する
+  // Vercel等のサーバーレス環境では、応答を返した後にバックグラウンド処理が
+  // 途中で打ち切られてしまうことがあるため、ここで完了を待つ。
   if (newReservation.status !== "waitlist") {
-    void syncToGoogleCalendar(newReservation).then(async (synced) => {
-      if (synced) {
-        await supabase
-          .from("reservations")
-          .update({ calendar_synced: true })
-          .eq("id", newReservation.id);
-      }
-    });
+    const synced = await syncToGoogleCalendar(newReservation);
+    if (synced) {
+      newReservation.calendarSynced = true;
+      await supabase
+        .from("reservations")
+        .update({ calendar_synced: true })
+        .eq("id", newReservation.id);
+    }
   }
   void notifyLine(newReservation);
 
@@ -171,16 +173,9 @@ export async function updateReservationStatus(
     return undefined;
   }
 
-  const updatePayload: Record<string, unknown> = { status };
-
-  // 承認された場合はGoogleカレンダーに同期（スタブ）
-  if (status === "approved" && !existing.calendar_synced) {
-    updatePayload.calendar_synced = true;
-  }
-
   const { data, error } = await supabase
     .from("reservations")
-    .update(updatePayload)
+    .update({ status })
     .eq("id", id)
     .select()
     .single();
@@ -190,10 +185,22 @@ export async function updateReservationStatus(
     return undefined;
   }
 
-  const updated = rowToReservation(data);
+  let updated = rowToReservation(data);
 
-  if (status === "approved" && updatePayload.calendar_synced) {
-    void syncToGoogleCalendar(updated);
+  // 承認に変わった場合、まだカレンダー未登録ならここで登録する
+  if (status === "approved" && !updated.calendarSynced) {
+    const synced = await syncToGoogleCalendar(updated);
+    if (synced) {
+      const { data: refreshed } = await supabase
+        .from("reservations")
+        .update({ calendar_synced: true })
+        .eq("id", id)
+        .select()
+        .single();
+      if (refreshed) {
+        updated = rowToReservation(refreshed);
+      }
+    }
   }
 
   return updated;
@@ -230,7 +237,7 @@ async function syncToGoogleCalendar(reservation: Reservation): Promise<boolean> 
     endIso: endDate.toISOString(),
   });
 
- if (result.success) {
+  if (result.success) {
     console.log(
       `[Googleカレンダー] 登録成功: 予約ID=${reservation.id} イベントID=${result.eventId}`
     );
