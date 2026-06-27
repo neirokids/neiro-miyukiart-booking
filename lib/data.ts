@@ -206,7 +206,7 @@ export async function updateReservationStatus(
 // ─────────────────────────────────────────
 async function syncToGoogleCalendar(reservation: Reservation): Promise<boolean> {
   const lesson = getLessonById(reservation.lessonId);
-  if (!lesson) return;
+  if (!lesson) return false;
 
   const startDate = new Date(lesson.date);
   const endDate = new Date(startDate.getTime() + lesson.durationMinutes * 60 * 1000);
